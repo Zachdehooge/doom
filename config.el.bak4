@@ -1,0 +1,310 @@
+;;; $DOOMDIR/config.el -*- lexical-binding: t; -*-
+
+;; Place your private configuration here! Remember, you do not need to run 'doom
+;; sync' after modifying this file!
+
+
+;; Some functionality uses this to identify you, e.g. GPG configuration, email
+;; clients, file templates and snippets. It is optional.
+;; (setq user-full-name "John Doe"
+;;       user-mail-address "john@doe.com")
+
+;; Doom exposes five (optional) variables for controlling fonts in Doom:
+;;
+;; - `doom-font' -- the primary font to use
+;; - `doom-variable-pitch-font' -- a non-monospace font (where applicable)
+;; - `doom-big-font' -- used for `doom-big-font-mode'; use this for
+;;   presentations or streaming.
+;; - `doom-symbol-font' -- for symbols
+;; - `doom-serif-font' -- for the `fixed-pitch-serif' face
+;;
+;; See 'C-h v doom-font' for documentation and more examples of what they
+;; accept. For example:
+;;
+;;(setq doom-font (font-spec :family "Fira Code" :size 12 :weight 'semi-light)
+;;      doom-variable-pitch-font (font-spec :family "Fira Sans" :size 13))
+;;
+;; If you or Emacs can't find your font, use 'M-x describe-font' to look them
+;; up, `M-x eval-region' to execute elisp code, and 'M-x doom/reload-font' to
+;; refresh your font settings. If Emacs still can't find your font, it likely
+;; wasn't installed correctly. Font issues are rarely Doom issues!
+
+;; There are two ways to load a theme. Both assume the theme is installed and
+;; available. You can either set `doom-theme' or manually load a theme with the
+;; `load-theme' function. This is the default:
+(setq doom-theme 'doom-tokyo-night)
+;; Specify both a dark and light theme, like so and Doom will choose which one
+;; to load based on your system light/dark setting:
+;;
+;;   (setq doom-theme '(doom-one   . doom-one-light))   ; (DARK . LIGHT)
+;;
+;; If you want more pro-active theme switching based on OS light/dark mode, look
+;; up the `auto-dark' package.
+
+;; This determines the style of line numbers in effect. If set to `nil', line
+;; numbers are disabled. For relative line numbers, set this to `relative'.
+(setq display-line-numbers-type t)
+
+;; If you use `org' and don't want your org files in the default location below,
+;; change `org-directory'. It must be set before org loads!
+(setq org-directory "~/org/")
+
+
+;; Whenever you reconfigure a package, make sure to wrap your config in an
+;; `with-eval-after-load' block, otherwise Doom's defaults may override your
+;; settings. E.g.
+;;
+;;   (with-eval-after-load 'PACKAGE
+;;     (setq x y))
+;;
+;; The exceptions to this rule:
+;;
+;;   - Setting file/directory variables (like `org-directory')
+;;   - Setting variables which explicitly tell you to set them before their
+;;     package is loaded (see 'C-h v VARIABLE' to look them up).
+;;   - Setting doom variables (which start with 'doom-' or '+').
+;;
+;; Here are some additional functions/macros that will help you configure Doom.
+;;
+;; - `load!' for loading external *.el files relative to this one
+;; - `add-load-path!' for adding directories to the `load-path', relative to
+;;   this file. Emacs searches the `load-path' when you load packages with
+;;   `require' or `use-package'.
+;; - `map!' for binding new keys
+;;
+;; To get information about any of these functions/macros, move the cursor over
+;; the highlighted symbol at press 'K' (non-evil users must press 'C-c c k').
+;; This will open documentation for it, including demos of how they are used.
+;; Alternatively, use `C-h o' to look up a symbol (functions, variables, faces,
+;; etc).
+;;
+;; You can also try 'gd' (or 'C-c c d') to jump to their definition and see how
+;; they are implemented.
+(use-package! elcord
+  :config
+  (setq elcord-quiet t                       ; don't spam messages when Discord isn't running
+        elcord-idle-timer 300                ; show "idle" after 5 minutes
+        elcord-editor-icon "doom_cute_icon"  ; Doom icon instead of the Emacs one
+        elcord-use-major-mode-as-main-icon t ; big icon = language (C++, etc.)
+        elcord-display-buffer-details t)     ; show the file name
+  (elcord-mode 1))
+
+
+;;; ---------------------------------------------------------------------------
+;;; File tree (Treemacs, standing in for nvim-tree)
+;;; ---------------------------------------------------------------------------
+
+;; Like your nvim-tree filters: show dotfiles, but hide .git and .idea
+(after! treemacs
+  (setq treemacs-show-hidden-files t
+        ;; Let the tree be resized by dragging its edge with the mouse
+        treemacs-width-is-initially-locked nil)
+  (add-to-list 'treemacs-ignored-file-predicates
+               (lambda (file _path) (member file '(".git" ".idea"))))
+  ;; Outside a git project, show the current folder (like nvim-tree does)
+  ;; instead of reopening the last Treemacs session
+  (add-to-list 'treemacs--find-user-project-functions
+               (lambda () default-directory) t))
+
+(defun my/open-treemacs-on-startup ()
+  "Open the file tree without moving the cursor out of the main window."
+  (require 'treemacs)
+  (unless (eq (treemacs-current-visibility) 'visible)
+    (save-selected-window (+treemacs/toggle))))
+
+;; Open the tree when Emacs starts (C-n hides it again)
+(if (daemonp)
+    (add-hook 'server-after-make-frame-hook #'my/open-treemacs-on-startup)
+  (add-hook 'window-setup-hook #'my/open-treemacs-on-startup))
+
+
+;;; ---------------------------------------------------------------------------
+;;; Neovim keybindings (NvChad defaults + ~/.config/nvim/lua/mappings.lua)
+;;; ---------------------------------------------------------------------------
+
+(setq evil-escape-key-sequence "jk")    ; map("i", "jk", "<ESC>")
+
+;; Stop evil-snipe from taking over ; and , (it would override ; -> : below)
+(setq evil-snipe-override-evil-repeat-keys nil)
+
+(defun my/nvim-copy-to-clipboard ()
+  "Copy the selection, or the current line, to the system clipboard (\"+y)."
+  (interactive)
+  (if (evil-visual-state-p)
+      (progn (evil-yank evil-visual-beginning evil-visual-end (evil-visual-type) ?+)
+             (evil-exit-visual-state))
+    (evil-yank (line-beginning-position) (line-beginning-position 2) 'line ?+)))
+
+(defun my/nvim-todo-search ()
+  "Search the project for TODO-style comments, like :TodoTelescope."
+  (interactive)
+  (consult-ripgrep nil "\\b\\(TODO\\|FIXME\\|HACK\\|BUG\\|WARN\\|NOTE\\|PERF\\)\\b"))
+
+(defun my/nvim-live-grep ()
+  "Live grep including hidden and ignored files, like your Telescope setup."
+  (interactive)
+  (let ((consult-ripgrep-args
+         (concat consult-ripgrep-args " --hidden --no-ignore -g !.git/ -g !.idea/")))
+    (consult-ripgrep)))
+
+(defun my/nvim-find-files ()
+  "Fuzzy find files including hidden and ignored ones, like your Telescope setup."
+  (interactive)
+  (let ((consult-find-args
+         "find . -not ( -path */.git -prune ) -not ( -path */.idea -prune ) -type f"))
+    (consult-find default-directory)))
+
+(defun my/nvim-run-file ()
+  "Run the current file, like your Overseer go_run / zig_run templates."
+  (interactive)
+  (unless buffer-file-name (user-error "Buffer isn't visiting a file"))
+  (save-buffer)
+  (let* ((file (shell-quote-argument buffer-file-name))
+         (bin  (shell-quote-argument
+                (expand-file-name (file-name-base buffer-file-name)
+                                  temporary-file-directory)))
+         (cmd (pcase major-mode
+                ((or 'go-mode 'go-ts-mode)         (concat "go run " file))
+                ((or 'zig-mode 'zig-ts-mode)       (concat "zig run " file))
+                ((or 'python-mode 'python-ts-mode) (concat "python3 " file))
+                ((or 'sh-mode 'bash-ts-mode)       (concat "bash " file))
+                ((or 'c++-mode 'c++-ts-mode)
+                 (format "g++ -std=c++20 -Wall -g %s -o %s && %s" file bin bin))
+                ((or 'c-mode 'c-ts-mode)
+                 (format "gcc -Wall -g %s -o %s && %s" file bin bin)))))
+    ;; Second arg `t' makes the output buffer interactive, so stdin (cin) works
+    (if cmd (compile cmd t) (call-interactively #'compile))))
+
+(defun my/nvim-toggle-run-output ()
+  "Show or hide the output of the last run, like :OverseerToggle."
+  (interactive)
+  (if-let ((win (get-buffer-window "*compilation*")))
+      (delete-window win)
+    (if (get-buffer "*compilation*")
+        (display-buffer "*compilation*")
+      (message "Nothing has been run yet"))))
+
+(defun my/cmake-build ()
+  "Build the CMake project this file belongs to (configuring it first if needed).
+Also refreshes compile_commands.json, so clangd picks up new dependencies."
+  (interactive)
+  (let ((root (locate-dominating-file default-directory "CMakeLists.txt")))
+    (unless root (user-error "No CMakeLists.txt found above this file"))
+    ;; Climb to the top-most CMakeLists.txt (subdirectories can have their own)
+    (while-let ((parent (locate-dominating-file
+                         (file-name-directory (directory-file-name root))
+                         "CMakeLists.txt")))
+      (setq root parent))
+    (let ((default-directory root))
+      (save-some-buffers t)
+      (compile (if (file-directory-p "build")
+                   "cmake --build build"
+                 "cmake -B build && cmake --build build && ln -sf build/compile_commands.json compile_commands.json")))))
+
+(defun my/nvim-toggle-relative-numbers ()
+  "Toggle relative line numbers."
+  (interactive)
+  (setq display-line-numbers (if (eq display-line-numbers 'relative) t 'relative)))
+
+(defun my/nvim-vterm-vsplit ()
+  "Open a terminal in a vertical split."
+  (interactive)
+  (select-window (split-window-right))
+  (+vterm/here nil))
+
+(defun my/nvim-preview (fn)
+  "Call lookup FN in a split, standing in for goto-preview's floating window."
+  (let ((buf (current-buffer)) (pt (point)))
+    (switch-to-buffer-other-window buf)
+    (goto-char pt)
+    (call-interactively fn)))
+
+(map!
+ ;; --- your mappings.lua ---
+ :nv ";"    #'evil-ex                          ; ; -> command mode
+ :n "M-j"   #'my/nvim-todo-search              ; TodoTelescope
+ :n "<f5>"  #'my/nvim-toggle-run-output        ; OverseerToggle
+ :n "<f6>"  #'my/nvim-run-file                 ; OverseerRun
+
+ ;; --- goto-preview (opens in a split) ---
+ :n "gpd" (cmd! (my/nvim-preview #'+lookup/definition))
+ :n "gpt" (cmd! (my/nvim-preview #'+lookup/type-definition))
+ :n "gpi" (cmd! (my/nvim-preview #'+lookup/implementations))
+ :n "gpr" (cmd! (my/nvim-preview #'+lookup/references))
+ :n "gP"  #'delete-other-windows               ; close the preview splits
+
+ ;; --- NvChad defaults ---
+ :n "C-h" #'evil-window-left
+ :n "C-j" #'evil-window-down
+ :n "C-k" #'evil-window-up
+ :n "C-l" #'evil-window-right
+ :n "C-s" #'save-buffer
+ :n "TAB"       #'next-buffer
+ :n [tab]       #'next-buffer
+ :n [backtab]   #'previous-buffer
+ :n "C-n"       #'+treemacs/toggle             ; NvimTreeToggle
+
+ :i "C-b" #'back-to-indentation
+ :i "C-e" #'end-of-line
+ :i "C-h" #'backward-char
+ :i "C-l" #'forward-char
+ :i "C-j" #'next-line
+ :i "C-k" #'previous-line
+
+ :leader
+ :desc "Copy to clipboard"     "c c" #'my/nvim-copy-to-clipboard
+ :desc "Cheatsheet"            "c h" #'which-key-show-top-level
+ :desc "Git commits"           "c m" #'magit-log-current
+ :desc "Toggle comment"        "/"   #'comment-line
+ :desc "Close buffer"          "x"   #'kill-current-buffer
+ :desc "Focus file tree"       "e"   #'treemacs-select-window
+ :desc "Terminal (vsplit)"     "v"   #'my/nvim-vterm-vsplit
+ :desc "Type definition"       "D"   #'+lookup/type-definition
+ :desc "Diagnostics list"      "d s" #'+default/diagnostics
+ :desc "Find files"            "f f" #'my/nvim-find-files
+ :desc "Find all files"        "f a" #'my/nvim-find-files
+ :desc "Live grep"             "f w" #'my/nvim-live-grep
+ :desc "Buffers"               "f b" #'consult-buffer
+ :desc "Help"                  "f h" #'describe-symbol
+ :desc "Recent files"          "f o" #'consult-recent-file
+ :desc "Search in buffer"      "f z" #'consult-line
+ :desc "Format"                "f m" #'+format/region-or-buffer
+ :desc "Git status"            "g t" #'magit-status
+ :desc "Themes"                "t h" #'load-theme
+ (:prefix ("r" . "run/rename")
+  :desc "Relative numbers"     "n"   #'my/nvim-toggle-relative-numbers
+  :desc "Toggle run output"    "t"   #'my/nvim-toggle-run-output
+  :desc "Run file"             "r"   #'my/nvim-run-file
+  :desc "Build CMake project"  "b"   #'my/cmake-build
+  :desc "LSP rename"           "a"   #'eglot-rename))
+
+;; Terminal toggles (NvChad <A-h> / <A-v> / <A-i>)
+(map! :nie "M-h" #'+vterm/toggle
+      :nie "M-v" #'my/nvim-vterm-vsplit
+      :nie "M-i" #'+vterm/here)
+
+;; NvChad <C-x> / your <Esc><Esc>: leave terminal insert mode
+(map! :after vterm
+      :map vterm-mode-map
+      :i "C-x" #'evil-normal-state)
+
+;; gD = declaration (NvChad LSP), only in buffers with a language server
+(map! :after eglot
+      :map eglot-mode-map
+      :n "gD" #'eglot-find-declaration)
+
+
+;;; ---------------------------------------------------------------------------
+;;; Mouse support in terminal Emacs (click to move cursor, drag, scroll)
+;;; ---------------------------------------------------------------------------
+(unless (display-graphic-p)
+  (xterm-mouse-mode 1))
+
+
+;;; ---------------------------------------------------------------------------
+;;; Line wrapping (like your nvim: wrap + linebreak + breakindent)
+;;; ---------------------------------------------------------------------------
+;; Wraps long lines at word boundaries, with wrapped lines keeping the indent
+(+global-word-wrap-mode +1)
+;; Show an arrow in the fringe on wrapped lines (like showbreak = "↪ ")
+(setq visual-line-fringe-indicators '(left-curly-arrow nil))

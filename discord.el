@@ -4,7 +4,8 @@
 ;;   Line 1 (details): file, cursor, evil state, scope, diagnostics
 ;;   Line 2 (state):   project, branch, LSP, buffers, tmux session
 ;; plus a per-project persistent timer, a "View Repository" button, and
-;; hiding presence entirely for secret files.
+;; hiding presence entirely for secret files. Icons are cord.nvim's
+;; minecraft theme, stored in icons/minecraft/ (see the Icons section).
 
 (defconst +elcord-max-len 128 "Discord's per-line limit.")
 
@@ -114,21 +115,109 @@
 
 ;;; Non-file buffers (cord.nvim's file_browser / vcs / docs / ...)
 
-(defun +elcord--special-line ()
-  (let ((name (+elcord--project-name)))
-    (cond
-     ((derived-mode-p '+doom-dashboard-mode) "Home")
-     ((or (derived-mode-p 'magit-mode) (bound-and-true-p git-commit-mode))
-      (concat "Committing changes in " name))
-     ((derived-mode-p 'dired-mode) (concat "Browsing files in " name))
-     ((derived-mode-p 'help-mode 'helpful-mode 'Info-mode 'Man-mode 'woman-mode 'apropos-mode)
-      "Reading Emacs docs")
-     ((derived-mode-p 'flycheck-error-list-mode 'flymake-diagnostics-buffer-mode)
-      (concat "Fixing problems in " name))
-     ((derived-mode-p 'debugger-mode 'gud-mode) (concat "Debugging in " name))
-     ((derived-mode-p 'vterm-mode 'eshell-mode 'term-mode 'shell-mode 'compilation-mode)
-      (concat "Running commands in " name))
-     ((derived-mode-p 'org-agenda-mode) "Taking notes in Org"))))
+(defvar +elcord-special-buffers
+  '(((+dashboard-mode +doom-dashboard-mode)    dashboard      "dashboard"  "Doom Dashboard")
+    ((magit-mode)                              vcs            "git"        "Magit")
+    ((treemacs-mode)                           file_browser   "folder"     "Treemacs")
+    ((dired-mode)                              file_browser   "folder"     "Dired")
+    ((package-menu-mode)                       plugin_manager "plugin"     "package.el")
+    ((lsp-log-io-mode eglot-list-connections-mode) lsp        "server"     "LSP")
+    ((help-mode helpful-mode Info-mode apropos-mode) docs     "book"       "Emacs")
+    ((Man-mode woman-mode)                     docs           "book"       "Man pages")
+    ((org-mode org-agenda-mode)                notes          "org"        "Orgmode")
+    ((debugger-mode)                           debug          "bug"        "Debugger")
+    ((gud-mode)                                debug          "bug"        "GNU Debugger")
+    ((dap-ui-repl-mode)                        debug          "bug"        "DAP")
+    ((ert-results-mode)                        test           "test"       "ERT")
+    ((flycheck-error-list-mode)                diagnostics    "diagnostic" "Flycheck")
+    ((flymake-diagnostics-buffer-mode)         diagnostics    "diagnostic" "Flymake")
+    ((tetris-mode)                             games          "controller" "Tetris")
+    ((snake-mode)                              games          "controller" "Snake")
+    ((gomoku-mode)                             games          "controller" "Gomoku")
+    ((pong-mode)                               games          "controller" "Pong")
+    ((solitaire-mode)                          games          "controller" "Solitaire")
+    ((bubbles-mode)                            games          "controller" "Bubbles")
+    ((5x5-mode)                                games          "controller" "5x5")
+    ((dun-mode)                                games          "controller" "Dunnet")
+    ((vterm-mode)                              terminal       "shell"      "vterm")
+    ((eshell-mode)                             terminal       "shell"      "Eshell")
+    ((term-mode)                               terminal       "shell"      "Term")
+    ((shell-mode)                              terminal       "shell"      "Shell")
+    ((compilation-mode)                        terminal       "shell"      "Compilation"))
+  "(MODES TYPE ICON NAME), like cord.nvim's mappings.lua.")
+
+(defun +elcord--special ()
+  "(TYPE ICON NAME) for a non-file buffer, or nil."
+  (if (bound-and-true-p git-commit-mode)
+      '(vcs "git" "Git")
+    (cl-loop for (modes . rest) in +elcord-special-buffers
+             when (apply #'derived-mode-p modes) return rest)))
+
+(defun +elcord--special-line (special)
+  "Text for SPECIAL, using the same wording as cord.lua."
+  (pcase-let ((`(,type ,_ ,name) special))
+    (pcase type
+      ('dashboard "Home")
+      ('file_browser (concat "Browsing files in " name))
+      ('plugin_manager (concat "Managing plugins in " name))
+      ('lsp (concat "Configuring LSP in " name))
+      ('docs (concat "Reading " name " docs"))
+      ('vcs (concat "Committing changes in " name))
+      ('notes (concat "Taking notes in " name))
+      ('debug (concat "Debugging in " name))
+      ('test (concat "Running tests in " name))
+      ('diagnostics (concat "Fixing problems in " name))
+      ('terminal (concat "Running commands in " name))
+      ('games (concat "Playing " name)))))
+
+;;; Icons: cord.nvim's minecraft theme, kept in $DOOMDIR/icons/minecraft/.
+;; Discord only loads images by URL, so they're served from this repo on GitHub;
+;; a new icon shows up once it's pushed. Map files to it in cord-icons.el.
+
+(load! "cord-icons")
+
+(defconst +elcord-icon-dir (expand-file-name "icons/minecraft/" doom-user-dir))
+(defconst +elcord-icon-url
+  "https://raw.githubusercontent.com/Zachdehooge/doom/main/icons/minecraft/%s.png")
+
+(defun +elcord--icon-url (icon)
+  "URL for ICON, falling back to the plain text icon if there's no local PNG."
+  (format +elcord-icon-url
+          (if (file-exists-p (expand-file-name (concat icon ".png") +elcord-icon-dir))
+              icon
+            "text")))
+
+(defvar +elcord-mode-icons
+  '((emacs-lisp-mode "lisp" . "Emacs Lisp")
+    (lisp-interaction-mode "lisp" . "Emacs Lisp")
+    (sh-mode "shell" . "Shell script")
+    (bash-ts-mode "shell" . "Shell script")
+    (fish-mode "fishshell" . "Fish")
+    (python-mode "python" . "Python")
+    (python-ts-mode "python" . "Python"))
+  "Fallback for files whose name/extension isn't in cord's table (e.g. shebang scripts).")
+
+(defun +elcord--file-icon ()
+  "(ICON . TOOLTIP) for the current buffer, using cord's filename/extension table."
+  (let ((name (downcase (file-name-nondirectory (or buffer-file-name (buffer-name))))))
+    (or (cdr (assoc name +elcord-cord-filename-icons))
+        ;; Longest suffix first, so foo.service.ts beats foo.ts
+        (cl-loop for i = (string-search "." name) then (string-search "." name (1+ i))
+                 while i
+                 thereis (cdr (assoc (substring name (1+ i)) +elcord-cord-extension-icons)))
+        (cl-loop for (mode . icon) in +elcord-mode-icons
+                 when (derived-mode-p mode) return icon)
+        (cons "text" (format-mode-line mode-name)))))
+
+(defun +elcord--assets (special)
+  "Large minecraft icon for the file or SPECIAL buffer, small Emacs icon."
+  (let ((icon (cond (elcord--idle-status '("idle" . "💤"))
+                    (special (cons (nth 1 special) (nth 2 special)))
+                    (t (+elcord--file-icon)))))
+    `(("large_image" . ,(+elcord--icon-url (car icon)))
+      ("large_text" . ,(cdr icon))
+      ("small_image" . ,(elcord--editor-icon))
+      ("small_text" . ,(format "GNU Emacs %s" emacs-version)))))
 
 ;;; Persistent per-project timer (cord.nvim persistent_timer, mode = "active")
 
@@ -181,8 +270,10 @@
   (if (and buffer-file-name
            (cl-some (lambda (re) (string-match-p re buffer-file-name)) +elcord-blacklist))
       :hidden
-    (let ((url (+elcord--repo-url)))
-      `(("details" . ,(or (+elcord--special-line) (+elcord--file-line)))
+    (let ((url (+elcord--repo-url))
+          (special (+elcord--special)))
+      `(("assets" . ,(+elcord--assets special))
+        ("details" . ,(if special (+elcord--special-line special) (+elcord--file-line)))
         ("state" . ,(+elcord--workspace-line))
         ("timestamps" ("start" . ,(+elcord--start-timestamp)))
         ,@(when (stringp url)
@@ -191,7 +282,9 @@
 (defun +elcord--update-presence-a ()
   "Re-send presence whenever anything shown changes, not just buffer/line."
   (let ((buf (window-buffer (or (minibuffer-selected-window) (selected-window)))))
-    (unless (elcord--buffer-boring-p (buffer-name buf))
+    ;; Treemacs' buffer name starts with a space, which elcord deems boring
+    (unless (and (elcord--buffer-boring-p (buffer-name buf))
+                 (not (eq (buffer-local-value 'major-mode buf) 'treemacs-mode)))
       (with-current-buffer buf
         (let ((activity (+elcord--compute)))
           (unless (equal activity +elcord--activity)
@@ -204,8 +297,7 @@
     (let ((nonce (format-time-string "%s%N")))
       (elcord--send-packet
        1 `(("cmd" . "SET_ACTIVITY")
-           ("args" . (("activity" . (("assets" . ,(elcord--mode-icon-and-text))
-                                     ,@+elcord--activity))
+           ("args" . (("activity" . ,+elcord--activity)
                       ("pid" . ,(emacs-pid))))
            ("nonce" . ,nonce))))))
 
@@ -218,6 +310,8 @@
         elcord-editor-icon "emacs_icon")
   (advice-add 'elcord--update-presence :override #'+elcord--update-presence-a)
   (advice-add 'elcord--set-presence :override #'+elcord--set-presence-a)
+  ;; elcord's idle presence takes its icons from here
+  (advice-add 'elcord--mode-icon-and-text :override (lambda () (+elcord--assets nil)))
   ;; Timer only counts active time; force a resend when coming back
   (advice-add 'elcord--start-idle :before (lambda (&rest _) (+elcord--commit-time)))
   (advice-add 'elcord--cancel-idle :before (lambda (&rest _) (setq +elcord--activity nil)))

@@ -76,3 +76,147 @@
 
 ;; Discord Rich Presence, matching nvim cord.lua
 (load! "discord")
+
+;;; ---------------------------------------------------------------------------
+;;; Dashboard, matching nvim's alpha.lua
+;;; ---------------------------------------------------------------------------
+(setq fancy-splash-image nil              ; ASCII banner in the GUI too
+      +dashboard-ascii-banner-fn
+      (lambda ()
+        (propertize
+         (string-join
+          '("         (\\,/)                    "
+            "         oo   '''//,        _      "
+            "       ,/_;~,       \\,    / '      "
+            "       \"'   \\    (    \\    !       "
+            "             ',|  \\    |__.'       "
+            "             '~  '~----''          "
+            "                                   "
+            "       Keith, the C++ rat          "
+            "   \"segfaults build character\"     ")
+          "\n")
+         'face '+dashboard-banner))
+      +dashboard-functions '(+dashboard-widget-banner +dashboard-widget-shortmenu))
+
+(defun my/dashboard-new-file ()
+  "Like nvim's `:ene | startinsert'."
+  (interactive)
+  (+default/new-buffer)
+  (when (bound-and-true-p evil-local-mode) (evil-insert-state)))
+
+(setq +dashboard-menu-sections
+      '(("Find file"
+         :icon (nerd-icons-octicon "nf-oct-search" :face '+dashboard-menu-title)
+         :key "f"
+         :action +default/find-file-under-here)
+        ("New file"
+         :icon (nerd-icons-octicon "nf-oct-file" :face '+dashboard-menu-title)
+         :key "n"
+         :action my/dashboard-new-file)
+        ("Quit"
+         :icon (nerd-icons-octicon "nf-oct-sign_out" :face '+dashboard-menu-title)
+         :key "q"
+         :action save-buffers-kill-terminal)))
+
+(map! :map +dashboard-mode-map
+      :n "f" #'+default/find-file-under-here
+      :n "n" #'my/dashboard-new-file
+      :n "q" #'save-buffers-kill-terminal)
+
+;;; ---------------------------------------------------------------------------
+;;; File tree (treemacs), with nvim-tree / NvChad keybinds
+;;; ---------------------------------------------------------------------------
+;; Same filters as nvim-tree: show dotfiles, hide .git and .idea
+(setq treemacs-show-hidden-files t)
+(after! treemacs
+  (add-to-list 'treemacs-ignored-file-predicates
+               (lambda (file _) (member file '(".git" ".idea")))))
+
+(defun my/treemacs-focus ()
+  "Like NvChad's <leader>e (NvimTreeFocus): open the tree if needed and jump into it."
+  (interactive)
+  (require 'treemacs)
+  (if (eq (treemacs-current-visibility) 'visible)
+      (treemacs-select-window)
+    (+treemacs/toggle)))
+
+(map! :n "C-n" #'+treemacs/toggle
+      :leader :desc "Focus file tree" "e" #'my/treemacs-focus)
+
+(defun my/treemacs--target-dir ()
+  "Directory under the cursor, or the parent of the file under the cursor."
+  (let ((path (treemacs--prop-at-point :path)))
+    (if (file-directory-p path) path (file-name-directory path))))
+
+(defun my/treemacs-create ()
+  "Like nvim-tree's `a': create a file, or a directory if the name ends in /."
+  (interactive)
+  (let* ((dir (my/treemacs--target-dir))
+         (name (read-string (format "Create (end with / for a directory) in %s: "
+                                    (abbreviate-file-name dir))))
+         (path (expand-file-name name dir)))
+    (if (string-suffix-p "/" name)
+        (make-directory path t)
+      (make-directory (file-name-directory path) t)
+      (write-region "" nil path nil 0 nil 'excl))
+    (treemacs-refresh)
+    (treemacs-goto-file-node (directory-file-name path))))
+
+(defvar my/treemacs-clipboard nil "(PATH . copy-or-cut) for nvim-tree style c/x/p.")
+
+(defun my/treemacs-copy () "nvim-tree's `c'." (interactive)
+  (setq my/treemacs-clipboard (cons (treemacs--prop-at-point :path) 'copy))
+  (message "Copied %s" (file-name-nondirectory (car my/treemacs-clipboard))))
+
+(defun my/treemacs-cut () "nvim-tree's `x'." (interactive)
+  (setq my/treemacs-clipboard (cons (treemacs--prop-at-point :path) 'cut))
+  (message "Cut %s" (file-name-nondirectory (car my/treemacs-clipboard))))
+
+(defun my/treemacs-paste ()
+  "nvim-tree's `p': paste the copied/cut file into the directory under the cursor."
+  (interactive)
+  (pcase-let* ((`(,src . ,op) (or my/treemacs-clipboard (user-error "Nothing copied or cut")))
+               (dest (expand-file-name (file-name-nondirectory (directory-file-name src))
+                                       (my/treemacs--target-dir))))
+    (when (and (file-exists-p dest)
+               (not (y-or-n-p (format "%s exists, overwrite? " (abbreviate-file-name dest)))))
+      (user-error "Cancelled"))
+    (if (eq op 'cut)
+        (progn (rename-file src dest t) (setq my/treemacs-clipboard nil))
+      (if (file-directory-p src)
+          (copy-directory src dest nil t t)
+        (copy-file src dest t)))
+    (treemacs-refresh)))
+
+(defun my/treemacs-preview ()
+  "nvim-tree's <Tab>: open the file but keep the cursor in the tree."
+  (interactive)
+  (treemacs-visit-node-no-split '(4)))
+
+(after! treemacs-evil
+  (evil-define-key* 'treemacs treemacs-mode-map
+    (kbd "o")     #'treemacs-RET-action
+    (kbd "a")     #'my/treemacs-create
+    (kbd "d")     #'treemacs-delete-file
+    (kbd "r")     #'treemacs-rename-file
+    (kbd "c")     #'my/treemacs-copy
+    (kbd "x")     #'my/treemacs-cut
+    (kbd "p")     #'my/treemacs-paste
+    (kbd "y")     #'treemacs-copy-filename-at-point
+    (kbd "Y")     #'treemacs-copy-relative-path-at-point
+    (kbd "gy")    #'treemacs-copy-absolute-path-at-point
+    (kbd "R")     #'treemacs-refresh
+    (kbd "H")     #'treemacs-toggle-show-dotfiles
+    (kbd "I")     #'treemacs-hide-gitignored-files-mode
+    (kbd "-")     #'treemacs-root-up
+    (kbd "C-]")   #'treemacs-root-down
+    (kbd "P")     #'treemacs-goto-parent-node
+    (kbd "DEL")   #'treemacs-collapse-parent-node
+    (kbd "W")     #'treemacs-collapse-all-projects
+    (kbd "s")     #'treemacs-visit-node-in-external-application
+    (kbd "TAB")   #'my/treemacs-preview
+    [tab]         #'my/treemacs-preview
+    ;; treemacs's "horizontal split" is vim's vsplit and vice versa
+    (kbd "C-v")   #'treemacs-visit-node-horizontal-split
+    (kbd "C-x")   #'treemacs-visit-node-vertical-split
+    (kbd "q")     #'treemacs-quit))
