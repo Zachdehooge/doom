@@ -220,3 +220,58 @@
     (kbd "C-v")   #'treemacs-visit-node-horizontal-split
     (kbd "C-x")   #'treemacs-visit-node-vertical-split
     (kbd "q")     #'treemacs-quit))
+
+;;; ---------------------------------------------------------------------------
+;;; Mouse in the terminal (emacs -nw): click, drag-select, scroll wheel
+;;; ---------------------------------------------------------------------------
+(xterm-mouse-mode 1)
+
+;;; ---------------------------------------------------------------------------
+;;; Line wrapping
+;;; ---------------------------------------------------------------------------
+;; Soft-wrap long lines everywhere (wrapped lines keep the code's indentation)
+(+global-word-wrap-mode +1)
+(add-to-list '+word-wrap-disabled-modes 'treemacs-mode)
+
+;;; ---------------------------------------------------------------------------
+;;; File tree width: fit the longest visible name, like nvim-tree's
+;;; view.width = { min = 15, max = -1, padding = 1 }
+;;; ---------------------------------------------------------------------------
+(defvar my/treemacs-min-width 15)
+(defvar my/treemacs-padding 1)
+(defvar my/treemacs--fit-timer nil)
+
+(defun my/treemacs-fit-width ()
+  "Resize the treemacs window to its longest line (expanded nodes only)."
+  (setq my/treemacs--fit-timer nil)
+  (when-let* ((win (treemacs-get-local-window)))
+    (with-selected-window win
+      (let ((longest 0))
+        (save-excursion
+          (goto-char (point-min))
+          (while (not (eobp))
+            (setq longest (max longest (string-width (buffer-substring (line-beginning-position)
+                                                                       (line-end-position)))))
+            (forward-line 1)))
+        (let ((width (max my/treemacs-min-width (+ longest my/treemacs-padding))))
+          (setq treemacs-width width)
+          (treemacs--set-width width))))))
+
+(defun my/treemacs-fit-width-soon (&rest _)
+  "Refit once the current command (expand, collapse, refresh...) has finished."
+  (unless my/treemacs--fit-timer
+    (setq my/treemacs--fit-timer (run-with-idle-timer 0 nil #'my/treemacs-fit-width))))
+
+(after! treemacs
+  (dolist (fn '(treemacs--expand-root-node treemacs--collapse-root-node
+                treemacs--expand-dir-node treemacs--collapse-dir-node
+                treemacs-root-up treemacs-root-down))
+    (advice-add fn :after #'my/treemacs-fit-width-soon))
+  (add-hook 'treemacs-post-refresh-hook #'my/treemacs-fit-width-soon)
+  (add-hook 'treemacs-select-functions #'my/treemacs-fit-width-soon))
+
+;; SPC r b / SPC r c: build & run (CMake/Maven/Gradle/Cargo/Python), like nvim
+(load! "build")
+
+;; ; enters command mode, like nvim's map("n", ";", ":")
+(map! :n ";" #'evil-ex)
