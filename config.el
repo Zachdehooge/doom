@@ -108,7 +108,7 @@
       '(("Find file"
          :icon (nerd-icons-octicon "nf-oct-search" :face '+dashboard-menu-title)
          :key "f"
-         :action +default/find-file-under-here)
+         :action my/find-file-under-here)
         ("New file"
          :icon (nerd-icons-octicon "nf-oct-file" :face '+dashboard-menu-title)
          :key "n"
@@ -119,7 +119,7 @@
          :action save-buffers-kill-terminal)))
 
 (map! :map +dashboard-mode-map
-      :n "f" #'+default/find-file-under-here
+      :n "f" #'my/find-file-under-here
       :n "n" #'my/dashboard-new-file
       :n "q" #'save-buffers-kill-terminal)
 
@@ -275,3 +275,140 @@
 
 ;; ; enters command mode, like nvim's map("n", ";", ":")
 (map! :n ";" #'evil-ex)
+
+;;; ---------------------------------------------------------------------------
+;;; .findignore: like nvim's Telescope setup, the file finders and project
+;;; search list everything (dotfiles, .gitignore'd files) except what's in
+;;; $DOOMDIR/.findignore (gitignore syntax)
+;;; ---------------------------------------------------------------------------
+(defvar my/findignore-file (expand-file-name ".findignore" doom-user-dir))
+
+(defun my/rg-files-command ()
+  (concat "rg -0 --files --color=never --hidden --no-ignore --ignore-file "
+          (shell-quote-argument my/findignore-file)))
+
+;; SPC SPC / SPC p f (projectile)
+(after! projectile
+  (setq projectile-git-use-fd nil
+        projectile-git-command (my/rg-files-command)
+        projectile-generic-command (my/rg-files-command)
+        ;; Re-read the file list each time so .findignore edits apply immediately
+        projectile-enable-caching nil))
+
+;; SPC f F / dashboard `f': files under the current directory, like Telescope find_files
+(defun my/find-file-under-here ()
+  "Recursive file search from `default-directory', honouring .findignore."
+  (interactive)
+  (let* ((files (split-string (shell-command-to-string (my/rg-files-command)) "\0" t))
+         (file (completing-read (format "Find file in %s: " (abbreviate-file-name default-directory))
+                                files nil t)))
+    (find-file (expand-file-name file))))
+
+(map! [remap +default/find-file-under-here] #'my/find-file-under-here)
+
+;; SPC s p / SPC / (ripgrep project search), like Telescope live_grep
+(defadvice! my/findignore-search-a (args)
+  :filter-args #'+vertico-file-search
+  (let ((extra (list "--no-ignore" "--ignore-file" (shell-quote-argument my/findignore-file))))
+    (plist-put args :args (append (plist-get args :args) extra))))
+
+;;; ---------------------------------------------------------------------------
+;;; LSP (eglot)
+;;; ---------------------------------------------------------------------------
+;; Share language servers installed by nvim's Mason (e.g. pylsp)
+(let ((mason-bin (expand-file-name "~/.local/share/nvim/mason/bin")))
+  (when (file-directory-p mason-bin)
+    (add-to-list 'exec-path mason-bin t)
+    (setenv "PATH" (concat (getenv "PATH") ":" mason-bin))))
+
+(defun my/eglot-server-name ()
+  "Name of the LSP server for this buffer, e.g. \"clangd\"."
+  (when-let* (((bound-and-true-p eglot--managed-mode))
+              (server (eglot-current-server)))
+    (or (plist-get (eglot--server-info server) :name)
+        (file-name-nondirectory (car (process-command (jsonrpc--process server)))))))
+
+;; Status line: show the server's name next to doom-modeline's LSP icon,
+;; like NvChad's statusline "lsp" module
+(defadvice! my/modeline-lsp-name-a (fn &rest args)
+  :around #'doom-modeline-segment--lsp
+  (let ((segment (apply fn args))
+        (name (my/eglot-server-name)))
+    (if (and segment name (doom-modeline--active))
+        (concat (string-trim-right segment) " "
+                (propertize name 'face 'doom-modeline-lsp-success)
+                (doom-modeline-spc))
+      segment)))
+
+;; SPC b h: back to the dashboard ("home")
+(map! :leader :desc "Dashboard" "b h" (cmd! (+dashboard/open (selected-frame))))
+
+;; Show the key help (which-key) almost instantly after SPC (Doom default: 1s)
+(setq which-key-idle-delay 0.05
+      which-key-idle-secondary-delay 0.05)
+
+;; :q, :qa, :wq, :x, SPC q q... quit without Doom's "really quit?" prompt
+;; (Emacs still asks before throwing away unsaved changes, like vim refusing :q)
+(setq confirm-kill-emacs nil)
+
+;;; ---------------------------------------------------------------------------
+;;; Autosave, like nvim's auto-save.nvim: save the current file quietly after
+;;; 1 second without typing (only real, writable files that have a name)
+;;; ---------------------------------------------------------------------------
+(defvar my/autosave-delay 1.0)
+
+(defun my/autosave ()
+  (when (and buffer-file-name
+             (buffer-modified-p)
+             (not buffer-read-only)
+             (file-writable-p buffer-file-name)
+             (not (file-remote-p buffer-file-name)))
+    (let ((inhibit-message t))
+      (save-buffer))))
+
+(run-with-idle-timer my/autosave-delay t #'my/autosave)
+
+;;; ---------------------------------------------------------------------------
+;;; gd: peek at the definition under the cursor in a panel at the bottom,
+;;; sized to the definition (6 lines min, half the screen max); cursor stays put.
+;;; gd again closes it. SPC c d still jumps to the definition.
+;;; ---------------------------------------------------------------------------
+(defvar my/peek-min-height 6)
+
+(defun my/peek--window ()
+  (cl-find-if (lambda (w) (window-parameter w 'my/peek)) (window-list)))
+
+(defun my/peek-definition ()
+  "Show the definition of the symbol at point without leaving the current window."
+  (interactive)
+  (if-let* ((win (my/peek--window)))
+      (delete-window win)
+    (let* ((backend (or (xref-find-backend) (user-error "No definition lookup here")))
+           (id (or (xref-backend-identifier-at-point backend)
+                   (user-error "Nothing to look up at point")))
+           (defs (or (xref-backend-definitions backend id)
+                     (user-error "No definition found for %s" id)))
+           (marker (xref-location-marker (xref-item-location (car defs))))
+           (buf (marker-buffer marker))
+           (lines (with-current-buffer buf
+                    (save-excursion
+                      (goto-char marker)
+                      ;; Height of the definition itself (function/class body)
+                      (let ((start (line-number-at-pos)))
+                        (ignore-errors (end-of-defun))
+                        (max 1 (- (line-number-at-pos) start))))))
+           (height (max my/peek-min-height
+                        (min (+ lines 2) (floor (frame-height) 2))))
+           (win (display-buffer-in-side-window
+                 buf `((side . bottom) (slot . 1) (window-height . ,height)
+                       (window-parameters . ((my/peek . t)))))))
+      (set-window-point win marker)
+      (with-selected-window win
+        (goto-char marker)
+        (recenter 0)
+        (pulse-momentary-highlight-one-line (point)))
+      (message "Peeking %s:%d (gd to close)"
+               (file-name-nondirectory (or (buffer-file-name buf) (buffer-name buf)))
+               (with-current-buffer buf (line-number-at-pos marker))))))
+
+(map! :n "gd" #'my/peek-definition)

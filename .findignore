@@ -1,0 +1,9 @@
+# Folders/files hidden from the file finders (SPC SPC, SPC f F, dashboard f) and project search (SPC s p, SPC /), gitignore syntax.
+# A name without a leading slash matches at any depth, e.g. ".cache/" skips every .cache folder.
+.git/
+.idea/
+.cache/
+.build/
+build/
+target/
+

@@ -46,7 +46,8 @@ another project and build it without opening a file there."
 (defun +build--cmake (root run)
   (let ((cmd (if (file-directory-p (expand-file-name "build" root))
                  "cmake --build build"
-               "cmake -B build && cmake --build build && ln -sf build/compile_commands.json compile_commands.json")))
+               ;; C++23 by default (GCC defaults to C++20); a project's own CMAKE_CXX_STANDARD wins
+               "cmake -B build -DCMAKE_CXX_STANDARD=23 && cmake --build build && ln -sf build/compile_commands.json compile_commands.json")))
     (if (not run)
         cmd
       (let ((text (+build--read (expand-file-name "CMakeLists.txt" root))))
@@ -175,6 +176,7 @@ start), else ROOT."
               (lambda (_) (format "*%s %s*" name (if run "build & run" "build"))))
              ;; comint so a running program can read input; cursor stays where it was
              (buf (save-selected-window (compile cmd run))))
+        (with-current-buffer buf (+build--panel-setup-h))
         (when-let* ((file-root (plist-get p :file-root)))
           (with-current-buffer buf
             (setq-local compilation-search-path (list nil (funcall file-root root)))))))))
@@ -192,7 +194,8 @@ start), else ROOT."
 (map! :leader
       (:prefix-map ("r" . "run")
        :desc "Build project"       "b" #'+build/build
-       :desc "Build & run project" "c" #'+build/build-and-run))
+       :desc "Build & run project" "c" #'+build/build-and-run
+       :desc "Toggle build output" "t" #'+build/toggle-panel))
 
 ;;; Cargo errors (same patterns as the nvim errorformat)
 
@@ -205,3 +208,61 @@ start), else ROOT."
                              1 2 3))
   (add-to-list 'compilation-error-regexp-alist 'cargo)
   (add-to-list 'compilation-error-regexp-alist 'cargo-panic))
+
+;;; Output panel: fit its height to the output, like the file tree's width.
+;; Starts small, grows as output arrives (capped at half the frame) and shrinks
+;; back to fit when the build finishes.
+
+(defvar +build-min-height 6)
+(defvar +build-max-height-ratio 0.5)
+
+(defun +build--fit-height (&optional window)
+  (when-let* ((win (or window (get-buffer-window (current-buffer)))))
+    (fit-window-to-buffer win
+                          (max +build-min-height
+                               (floor (* +build-max-height-ratio (frame-height (window-frame win)))))
+                          +build-min-height)
+    ;; Keep the newest output visible
+    (with-selected-window win
+      (goto-char (point-max))
+      (recenter -1))))
+
+(defvar-local +build--fit-timer nil)
+(defun +build--fit-soon (&rest _)
+  "Refit after a burst of output (debounced)."
+  (unless +build--fit-timer
+    (let ((buf (current-buffer)))
+      (setq +build--fit-timer
+            (run-with-timer 0.1 nil
+                            (lambda ()
+                              (when (buffer-live-p buf)
+                                (with-current-buffer buf
+                                  (setq +build--fit-timer nil)
+                                  (+build--fit-height)))))))))
+
+(defun +build--panel-setup-h ()
+  (when (string-match-p +build-buffer-regexp (buffer-name))
+    (setq +build--last-buffer (current-buffer))
+    (add-hook 'after-change-functions #'+build--fit-soon nil t)))
+
+(defconst +build-buffer-regexp "^\\*[a-z]+ build\\(?: & run\\)?\\*$")
+
+(set-popup-rule! +build-buffer-regexp
+  :side 'bottom :vslot -2 :size #'+build--fit-height
+  :select nil :quit 'current :ttl nil)
+
+(defvar +build--last-buffer nil "Most recent build output buffer.")
+
+(defun +build/toggle-panel ()
+  "Like nvim's <leader>rt (OverseerToggle): close the build output panel, or
+reopen the last build's output if it's closed."
+  (interactive)
+  (let ((wins (cl-remove-if-not
+               (lambda (w) (string-match-p +build-buffer-regexp (buffer-name (window-buffer w))))
+               (window-list))))
+    (cond (wins (mapc #'delete-window wins))
+          ((buffer-live-p +build--last-buffer)
+           (save-selected-window (display-buffer +build--last-buffer)))
+          (t (user-error "No build output yet (SPC r b / SPC r c)")))))
+(add-hook 'compilation-finish-functions
+          (lambda (buf _) (with-current-buffer buf (+build--fit-soon))))
